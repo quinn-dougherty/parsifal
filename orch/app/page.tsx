@@ -1,9 +1,9 @@
 import Link from "next/link";
 
 const routes = [
-  { href: "/terminal", label: "Terminal", desc: "ttyd web terminal" },
-  { href: "/system", label: "System", desc: "usage, info & sessions" },
   { href: "/parsifal", label: "Parsifal", desc: "agent orchestration" },
+  { href: "/system", label: "System", desc: "usage, info & sessions" },
+  { href: "/terminal", label: "Terminal", desc: "ttyd web terminal" },
 ];
 
 export default function Home() {
