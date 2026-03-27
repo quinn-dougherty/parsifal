@@ -315,11 +315,19 @@ function LogViewer({ log, isRunning }: { log: string; isRunning: boolean }) {
 // --- Run info box ---
 
 function RunInfo({ meta, onViewReport }: { meta: RunMeta; onViewReport: () => void }) {
+  const goal = meta.spec?.goal ?? ""
+  const strategyLabel = meta.strategy
+
   return (
     <div className="mb-4 rounded border border-gray-800 bg-gray-900 p-3 text-sm">
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-gray-400">
         <span>agent: <span className="text-white">{meta.agent}</span></span>
-        <span>mode: <span className="text-white">{meta.mode}</span></span>
+        <span>strategy: <span className="text-white">{strategyLabel}</span></span>
+        {meta.preset && (
+          <span className="rounded bg-purple-900/30 border border-purple-800 px-1.5 py-0.5 text-[10px] text-purple-400">
+            {meta.preset}
+          </span>
+        )}
         <span>started {relativeTime(new Date(meta.startedAt))}</span>
         {meta.pr?.url && (
           <a
@@ -344,7 +352,18 @@ function RunInfo({ meta, onViewReport }: { meta: RunMeta; onViewReport: () => vo
           {meta.resetCount && meta.resetCount > 0 && <span>resets: {meta.resetCount}</span>}
         </div>
       )}
-      <p className="mt-2 text-gray-500 font-mono text-xs whitespace-pre-wrap">{meta.prompt}</p>
+      {meta.win && (
+        <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
+          <span>win: {meta.win.type === "programmatic" ? `\`${meta.win.check}\`` : meta.win.criteria}</span>
+          {meta.win.label && <span>({meta.win.label})</span>}
+          {meta.winResult && (
+            <span className={meta.winResult.passed ? "text-emerald-400" : "text-orange-400"}>
+              {meta.winResult.passed ? "passed" : "failed"}{meta.winResult.detail ? ` — ${meta.winResult.detail}` : ""}
+            </span>
+          )}
+        </div>
+      )}
+      <p className="mt-2 text-gray-500 font-mono text-xs whitespace-pre-wrap">{goal}</p>
     </div>
   )
 }
@@ -387,7 +406,7 @@ export default function RunPage() {
         <h1 className="font-mono text-lg font-bold truncate">{id}</h1>
         {meta && (
           <span className={`text-sm font-medium ${meta.stale ? "text-yellow-400" : statusColors[meta.status] || "text-gray-400"}`}>
-            {meta.stale ? "stuck" : meta.status}{!meta.stale && (meta.status === "completed" || meta.status === "failed") ? ` (exit ${meta.exitCode ?? "?"})` : ""}
+            {meta.stale ? "stuck" : meta.status}{!meta.stale && (meta.status === "completed" || meta.status === "failed" || meta.status === "succeeded") ? ` (exit ${meta.exitCode ?? "?"})` : ""}
           </span>
         )}
       </div>

@@ -74,7 +74,7 @@ const handleReset = (id: string, meta: RunMeta, message?: string) =>
     const workDir = meta.workdir || `/tmp/${id}`
     mkdirSync(workDir, { recursive: true })
 
-    const agentCmd = buildAgentCommand(meta.agent, prompt, meta.mode)
+    const agentCmd = buildAgentCommand(meta.agent, prompt, meta.strategy)
     if (!agentCmd) return yield* Effect.fail(new Internal(`Unknown agent: ${meta.agent}`))
 
     meta.status = "running"

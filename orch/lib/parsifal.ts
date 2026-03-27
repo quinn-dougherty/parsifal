@@ -10,7 +10,7 @@ import {
 } from "fs"
 import { join } from "path"
 import { homedir } from "os"
-import type { RunMeta, LaunchRequest } from "./types"
+import type { RunMeta, LaunchRequest, Spec, Strategy, Preset, WinResult } from "./types"
 import { exec, escapeShell, type ShellError } from "./shell"
 import { paneStatus } from "./tmux"
 
@@ -19,6 +19,7 @@ import { paneStatus } from "./tmux"
 const home = process.env.HOME ?? homedir()
 export const RUNS_DIR = join(home, ".parsifal", "runs")
 export const ORCH_DIR = join(home, "projects", "self", "orch")
+export const PRESETS_DIR = join(home, ".parsifal", "presets")
 
 // --- Path helpers ---
 
@@ -51,15 +52,6 @@ export const writeFile = (path: string, content: string) =>
     catch: () => new FsError(`Failed to write: ${path}`),
   })
 
-export const readMeta = (id: string) =>
-  Effect.try({
-    try: () => JSON.parse(readFileSync(metaPath(id), "utf-8")) as RunMeta,
-    catch: () => new FsError(`Failed to read metadata for ${id}`),
-  })
-
-export const writeMeta = (id: string, meta: RunMeta) =>
-  writeFile(metaPath(id), JSON.stringify(meta, null, 2))
-
 export const appendLog = (id: string, text: string): Effect.Effect<void, never> =>
   Effect.try({
     try: () => {
@@ -68,6 +60,64 @@ export const appendLog = (id: string, text: string): Effect.Effect<void, never> 
     },
     catch: () => new FsError("Failed to append log"),
   }).pipe(Effect.catchAll(() => Effect.void))
+
+// --- Legacy migration ---
+
+function migrateLegacyMeta(raw: Record<string, unknown>): RunMeta {
+  if (raw.mode && !raw.spec) {
+    const mode = raw.mode as string
+    const prompt = (raw.prompt as string) ?? ""
+    return {
+      ...raw,
+      spec: {
+        goal: prompt,
+        repo: (raw.repo as string) ?? undefined,
+        report: mode === "research" || mode === "pm",
+      },
+      strategy: (mode === "job" || (mode === "pr" && raw.workdir))
+        ? "supervised" as Strategy
+        : "fire-and-forget" as Strategy,
+      win: null,
+      winResult: null,
+      preset: null,
+    } as unknown as RunMeta
+  }
+  return raw as unknown as RunMeta
+}
+
+// --- Metadata read/write ---
+
+export const readMeta = (id: string) =>
+  Effect.try({
+    try: () => {
+      const raw = JSON.parse(readFileSync(metaPath(id), "utf-8"))
+      return migrateLegacyMeta(raw)
+    },
+    catch: () => new FsError(`Failed to read metadata for ${id}`),
+  })
+
+export const writeMeta = (id: string, meta: RunMeta) =>
+  writeFile(metaPath(id), JSON.stringify(meta, null, 2))
+
+// --- Presets ---
+
+export function loadPresets(): Preset[] {
+  if (!existsSync(PRESETS_DIR)) return []
+  return readdirSync(PRESETS_DIR)
+    .filter((f) => f.endsWith(".json"))
+    .map((f) => {
+      try { return JSON.parse(readFileSync(join(PRESETS_DIR, f), "utf-8")) as Preset }
+      catch { return null }
+    })
+    .filter((p): p is Preset => p !== null)
+}
+
+export function loadPreset(name: string): Preset | null {
+  const path = join(PRESETS_DIR, `${sanitizeId(name)}.json`)
+  if (!existsSync(path)) return null
+  try { return JSON.parse(readFileSync(path, "utf-8")) as Preset }
+  catch { return null }
+}
 
 // --- Secrets ---
 
@@ -87,9 +137,9 @@ export function loadSecrets(secrets: string[]): Record<string, string> {
 
 // --- Agent commands ---
 
-export function buildAgentCommand(agent: string, promptFile: string, mode: string, hasWorkdir?: boolean): string | null {
+export function buildAgentCommand(agent: string, promptFile: string, strategy: Strategy): string | null {
   const prompt = `"$(cat ${promptFile})"`
-  const interactive = mode === "job" || (mode === "pr" && hasWorkdir)
+  const interactive = strategy !== "fire-and-forget"
   switch (agent) {
     case "claude":
       return interactive
@@ -106,32 +156,44 @@ export function buildAgentCommand(agent: string, promptFile: string, mode: strin
 
 // --- Workdir resolution ---
 
-export function resolveWorkdir(mode: string, workdir: string | undefined, runId: string): string {
+export function resolveWorkdir(workdir: string | undefined, runId: string): string {
   if (workdir) return workdir.replace(/^~(?=$|\/)/, home)
   return `/tmp/${runId}`
 }
 
 // --- Prompt building ---
 
-export function buildPromptContent(req: LaunchRequest, workDir: string, report: string): string {
-  const parts = [req.prompt]
+export function buildPrompt(req: LaunchRequest, workDir: string, reportFile: string): string {
+  const parts: string[] = [req.spec.goal]
 
-  if (req.repo) {
-    parts.push(`\nRepo: ${req.repo} — clone it into your working directory to get started.`)
+  if (req.spec.repo) {
+    parts.push(`\nRepo: ${req.spec.repo} — clone it into your working directory to get started.`)
   }
-  if (req.mode === "research" || req.mode === "pm") {
-    parts.push(`\nWrite your final report/summary to: ${report}`)
+
+  parts.push(`\nYour working directory is: ${workDir}`)
+  if (req.workdir) {
+    parts.push(`This is a persistent directory. Edit the tree directly.`)
   }
-  if (req.mode === "job") {
-    parts.push(`\nThis is a job run. Your working directory is persistent at: ${workDir}`)
-    parts.push(`All output should stay in this directory. Do not create PRs.`)
-  } else if (req.mode === "pr" && req.workdir) {
-    parts.push(`\nYour working directory is: ${workDir}`)
-    parts.push(`Edit the tree directly — do not create branches or commits. The workdir has existing state (gitignored artifacts, data, etc).`)
-  } else {
-    parts.push(`\nYour working directory is: ${workDir}`)
+
+  if (req.spec.report) {
+    parts.push(`\nWrite your final report/summary to: ${reportFile}`)
   }
-  parts.push(`You are authenticated to the gh CLI and have git+ssh access.`)
+
+  if (req.spec.win) {
+    if (req.spec.win.type === "programmatic") {
+      const label = req.spec.win.label ? ` (${req.spec.win.label})` : ""
+      parts.push(`\nSuccess criterion: \`${req.spec.win.check}\` must exit 0.${label}`)
+    } else {
+      parts.push(`\nSuccess will be judged by: ${req.spec.win.criteria}`)
+    }
+  }
+
+  if (req.spec.constraints?.length) {
+    parts.push(`\nConstraints:`)
+    for (const c of req.spec.constraints) parts.push(`- ${c}`)
+  }
+
+  parts.push(`\nYou are authenticated to the gh CLI and have git+ssh access.`)
 
   return parts.join("\n")
 }
@@ -160,6 +222,21 @@ export function buildLaunchScript(
   parts.push(agentCmd)
   const script = parts.join("; ")
   return `(${script}) 2>&1 | tee ${logFile}`
+}
+
+// --- Project name extraction (for run IDs) ---
+
+export function projectName(req: LaunchRequest): string {
+  if (req.workdir) {
+    const normalized = req.workdir.replace(/\/+$/, "")
+    const last = normalized.split("/").pop()
+    if (last && last !== "~") return last
+  }
+  if (req.spec.repo) {
+    const last = req.spec.repo.split("/").pop()?.replace(/\.git$/, "")
+    if (last) return last
+  }
+  return "run"
 }
 
 // --- Run status helpers ---
@@ -193,7 +270,73 @@ export const checkForPR = (id: string, workdir?: string | null): Effect.Effect<
     return Array.isArray(prs) && prs.length > 0 ? prs[0] : null
   }).pipe(Effect.catchAll(() => Effect.succeed(null)))
 
-// --- Run enrichment (status checks, PR detection) ---
+// --- Win condition evaluation ---
+
+export const checkProgrammaticWin = (
+  check: string,
+  workdir: string,
+): Effect.Effect<WinResult, never> =>
+  exec(check, { timeout: 30000, cwd: workdir }).pipe(
+    Effect.map((stdout) => ({
+      passed: true,
+      checkedAt: new Date().toISOString(),
+      detail: stdout.trim().slice(0, 500),
+    })),
+    Effect.catchAll(() =>
+      Effect.succeed({
+        passed: false,
+        checkedAt: new Date().toISOString(),
+        detail: "Check command exited non-zero",
+      }),
+    ),
+  )
+
+export const checkVibesWin = (
+  id: string,
+  criteria: string,
+  workdir: string,
+): Effect.Effect<WinResult, never> =>
+  Effect.gen(function* () {
+    const logContent = existsSync(logPath(id))
+      ? readFileSync(logPath(id), "utf-8").slice(-10000)
+      : "(no log available)"
+
+    const judgePrompt = [
+      "You are judging whether an agent run succeeded.",
+      "",
+      `Criteria: ${criteria}`,
+      "",
+      "Here is the tail of the agent's log:",
+      "---",
+      logContent,
+      "---",
+      "",
+      'Respond with a JSON object: { "passed": true/false, "reason": "..." }',
+      "Output ONLY the JSON, nothing else.",
+    ].join("\n")
+
+    const result = yield* exec(
+      `echo '${escapeShell(judgePrompt)}' | claude --dangerously-skip-permissions --print -`,
+      { timeout: 60000, cwd: workdir },
+    ).pipe(Effect.catchAll(() => Effect.succeed('{"passed": false, "reason": "judge failed to run"}')))
+
+    try {
+      const parsed = JSON.parse(result.trim())
+      return {
+        passed: !!parsed.passed,
+        checkedAt: new Date().toISOString(),
+        detail: parsed.reason || "",
+      }
+    } catch {
+      return {
+        passed: false,
+        checkedAt: new Date().toISOString(),
+        detail: `Judge output unparseable: ${result.slice(0, 200)}`,
+      }
+    }
+  })
+
+// --- Run enrichment (status checks, PR detection, win conditions) ---
 
 export const enrichRun = (run: RunMeta): Effect.Effect<{ run: RunMeta; dirty: boolean }, never> =>
   Effect.gen(function* () {
@@ -202,10 +345,20 @@ export const enrichRun = (run: RunMeta): Effect.Effect<{ run: RunMeta; dirty: bo
     if (run.status === "running") {
       const pane = yield* paneStatus(run.id)
       if (!pane.alive) {
-        // null exitCode means session is gone entirely (e.g. killed by deploy restart)
-        // — assume completed since we have no evidence of failure
-        run.status = pane.exitCode === null || pane.exitCode === 0 ? "completed" : "failed"
+        const baseStatus = pane.exitCode === null || pane.exitCode === 0 ? "completed" : "failed"
         run.exitCode = pane.exitCode
+        run.status = baseStatus
+
+        // Check win condition on clean exit
+        if (baseStatus === "completed" && run.win) {
+          const workdir = run.workdir || `/tmp/${run.id}`
+          const result = run.win.type === "programmatic"
+            ? yield* checkProgrammaticWin(run.win.check, workdir)
+            : yield* checkVibesWin(run.id, run.win.criteria, workdir)
+          run.winResult = result
+          if (result.passed) run.status = "succeeded"
+        }
+
         dirty = true
       } else {
         const { stale, lastActivity } = checkStale(run)
@@ -213,7 +366,8 @@ export const enrichRun = (run: RunMeta): Effect.Effect<{ run: RunMeta; dirty: bo
         run.lastActivity = lastActivity
       }
 
-      if (run.mode === "pr") {
+      // PR detection for runs with repos
+      if (run.spec?.repo) {
         const pr = yield* checkForPR(run.id, run.workdir)
         if (pr) {
           run.pr = pr

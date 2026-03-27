@@ -2,8 +2,12 @@ import { Effect } from "effect"
 import { execSync } from "child_process"
 import { exec, execFireAndForget, escapeShell } from "./shell"
 import type { TmuxSession } from "./types"
+import { homedir } from "os"
+import { join } from "path"
 
-const tmux = (args: string) => `tmux ${args}`
+const home = process.env.HOME ?? homedir()
+const SOCKET_PATH = join(home, ".parsifal", "tmux.sock")
+const tmux = (args: string) => `tmux -S ${SOCKET_PATH} ${args}`
 
 export const sessionExists = (id: string): Effect.Effect<boolean, never> =>
   exec(tmux(`has-session -t ${id}`)).pipe(
@@ -30,7 +34,13 @@ export const paneStatus = (id: string): Effect.Effect<PaneStatus, never> =>
       const parsed = parseInt(code, 10)
       return { alive: false, exitCode: isNaN(parsed) ? null : parsed }
     }),
-    Effect.catchAll(() => Effect.succeed({ alive: false, exitCode: null } as PaneStatus)),
+    Effect.catchAll(() =>
+      // tmux unreachable — fall back to process-based detection
+      exec(`pgrep -f "tmux.*-S ${SOCKET_PATH}.*${id}"`, { timeout: 5000 }).pipe(
+        Effect.map(() => ({ alive: true, exitCode: null } as PaneStatus)),
+        Effect.catchAll(() => Effect.succeed({ alive: false, exitCode: null } as PaneStatus)),
+      )
+    ),
   )
 
 export const sendKeys = (id: string, keys: string) =>
