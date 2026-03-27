@@ -12,7 +12,7 @@ import { join } from "path"
 import { homedir } from "os"
 import type { RunMeta, LaunchRequest } from "./types"
 import { exec, escapeShell, type ShellError } from "./shell"
-import { paneAlive } from "./tmux"
+import { paneStatus } from "./tmux"
 
 // --- Constants ---
 
@@ -87,11 +87,12 @@ export function loadSecrets(secrets: string[]): Record<string, string> {
 
 // --- Agent commands ---
 
-export function buildAgentCommand(agent: string, promptFile: string, mode: string): string | null {
+export function buildAgentCommand(agent: string, promptFile: string, mode: string, hasWorkdir?: boolean): string | null {
   const prompt = `"$(cat ${promptFile})"`
+  const interactive = mode === "job" || (mode === "pr" && hasWorkdir)
   switch (agent) {
     case "claude":
-      return mode === "job"
+      return interactive
         ? `claude --dangerously-skip-permissions ${prompt}`
         : `claude --dangerously-skip-permissions --print ${prompt}`
     case "codex":
@@ -106,7 +107,7 @@ export function buildAgentCommand(agent: string, promptFile: string, mode: strin
 // --- Workdir resolution ---
 
 export function resolveWorkdir(mode: string, workdir: string | undefined, runId: string): string {
-  if (mode === "job" && workdir) return workdir.replace(/^~(?=$|\/)/, home)
+  if (workdir) return workdir.replace(/^~(?=$|\/)/, home)
   return `/tmp/${runId}`
 }
 
@@ -124,6 +125,9 @@ export function buildPromptContent(req: LaunchRequest, workDir: string, report: 
   if (req.mode === "job") {
     parts.push(`\nThis is a job run. Your working directory is persistent at: ${workDir}`)
     parts.push(`All output should stay in this directory. Do not create PRs.`)
+  } else if (req.mode === "pr" && req.workdir) {
+    parts.push(`\nYour working directory is: ${workDir}`)
+    parts.push(`Edit the tree directly — do not create branches or commits. The workdir has existing state (gitignored artifacts, data, etc).`)
   } else {
     parts.push(`\nYour working directory is: ${workDir}`)
   }
@@ -152,6 +156,7 @@ export function buildLaunchScript(
 ): string {
   const parts = [`cd ${workDir}`]
   if (envFile) parts.push(`. ${envFile}`)
+  parts.push(`echo "=== AGENT STARTED $(date -Iseconds) ==="`)
   parts.push(agentCmd)
   const script = parts.join("; ")
   return `(${script}) 2>&1 | tee ${logFile}`
@@ -173,14 +178,15 @@ export function checkStale(run: RunMeta): { stale: boolean; lastActivity: string
   }
 }
 
-export const checkForPR = (id: string): Effect.Effect<
+export const checkForPR = (id: string, workdir?: string | null): Effect.Effect<
   { number: number; url: string; state: string } | null,
   never
 > =>
   Effect.gen(function* () {
-    if (!existsSync(`/tmp/${id}`)) return null
+    const dir = workdir || `/tmp/${id}`
+    if (!existsSync(dir)) return null
     const result = yield* exec(
-      `cd /tmp/${id} && gh pr list --head parsifal/${id} --json number,url,state --limit 1`,
+      `cd ${dir} && gh pr list --head parsifal/${id} --json number,url,state --limit 1`,
       { timeout: 10000 },
     )
     const prs = JSON.parse(result)
@@ -194,9 +200,12 @@ export const enrichRun = (run: RunMeta): Effect.Effect<{ run: RunMeta; dirty: bo
     let dirty = false
 
     if (run.status === "running") {
-      const alive = yield* paneAlive(run.id)
-      if (!alive) {
-        run.status = "completed"
+      const pane = yield* paneStatus(run.id)
+      if (!pane.alive) {
+        // null exitCode means session is gone entirely (e.g. killed by deploy restart)
+        // — assume completed since we have no evidence of failure
+        run.status = pane.exitCode === null || pane.exitCode === 0 ? "completed" : "failed"
+        run.exitCode = pane.exitCode
         dirty = true
       } else {
         const { stale, lastActivity } = checkStale(run)
@@ -205,7 +214,7 @@ export const enrichRun = (run: RunMeta): Effect.Effect<{ run: RunMeta; dirty: bo
       }
 
       if (run.mode === "pr") {
-        const pr = yield* checkForPR(run.id)
+        const pr = yield* checkForPR(run.id, run.workdir)
         if (pr) {
           run.pr = pr
           dirty = true

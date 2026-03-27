@@ -22,6 +22,7 @@ export interface RunMeta {
   lastActivity?: string | null
   resetCount?: number
   resetAt?: string
+  exitCode?: number | null
 }
 
 export interface TmuxSession {
@@ -80,6 +81,7 @@ export interface Run {
 export const statusColors: Record<string, string> = {
   running: "text-green-400",
   completed: "text-gray-400",
+  failed: "text-red-400",
   error: "text-red-400",
   stuck: "text-yellow-400",
 }

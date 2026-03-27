@@ -44,8 +44,8 @@ function LaunchForm({ runs, onLaunched }: { runs: Run[]; onLaunched: () => void 
           secrets: secrets.split(",").map((s) => s.trim()).filter(Boolean),
           agent,
           mode,
-          ...(mode === "job" && workdir ? { workdir } : {}),
-          ...(mode === "job" ? { watchdog: { staleAfterMin: parseInt(staleAfterMin) || 10 } } : {}),
+          ...(workdir ? { workdir } : {}),
+          ...((mode === "job" || mode === "pr") ? { watchdog: { staleAfterMin: parseInt(staleAfterMin) || 10 } } : {}),
         }),
       })
       if (res.ok) {
@@ -156,7 +156,7 @@ function LaunchForm({ runs, onLaunched }: { runs: Run[]; onLaunched: () => void 
         </div>
       </div>
 
-      {mode === "job" && (
+      {(mode === "job" || mode === "pr") && (
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
             <label className="mb-1 block text-sm text-gray-400">Working Directory</label>

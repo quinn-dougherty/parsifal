@@ -8,6 +8,7 @@ import { Modal } from "@/components/modal"
 import { relativeTime } from "@/lib/time"
 import type { RunMeta } from "@/lib/types"
 import { statusColors } from "@/lib/types"
+import { parseLog, type SegmentType, type LogSegment } from "@/lib/log-parser"
 
 // --- Control panel ---
 
@@ -151,12 +152,87 @@ function DeployButton({ id, onDone }: { id: string; onDone: () => void }) {
   )
 }
 
+// --- Log segment rendering ---
+
+const segmentStyles: Record<SegmentType, { border: string; bg: string; text: string; label: string; labelColor: string }> = {
+  agent:          { border: "border-gray-800",  bg: "",                text: "text-gray-300",  label: "",           labelColor: "" },
+  system:         { border: "border-amber-900",  bg: "bg-amber-950/30", text: "text-amber-400", label: "SYSTEM",     labelColor: "text-amber-500" },
+  "user-send":    { border: "border-blue-900",   bg: "bg-blue-950/30",  text: "text-blue-300",  label: "SEND",       labelColor: "text-blue-400" },
+  "user-nudge":   { border: "border-green-900",  bg: "bg-green-950/30", text: "text-green-300", label: "NUDGE",      labelColor: "text-green-400" },
+  "user-interrupt":{ border: "border-yellow-900", bg: "bg-yellow-950/30",text: "text-yellow-300",label: "INTERRUPT",  labelColor: "text-yellow-400" },
+  code:           { border: "border-gray-700",   bg: "bg-gray-950",     text: "text-emerald-300",label: "",          labelColor: "" },
+}
+
+const filterLabels: Record<string, { label: string; color: string; activeColor: string }> = {
+  agent:    { label: "Agent",     color: "border-gray-600 text-gray-500",  activeColor: "border-gray-400 text-gray-200 bg-gray-800" },
+  system:   { label: "System",    color: "border-amber-800 text-amber-600", activeColor: "border-amber-500 text-amber-300 bg-amber-950" },
+  user:     { label: "User",      color: "border-blue-800 text-blue-600",  activeColor: "border-blue-500 text-blue-300 bg-blue-950" },
+  code:     { label: "Code",      color: "border-emerald-800 text-emerald-600", activeColor: "border-emerald-500 text-emerald-300 bg-emerald-950" },
+}
+
+function LogSegmentView({ segment }: { segment: LogSegment }) {
+  const style = segmentStyles[segment.type]
+
+  if (segment.type === "system") {
+    return (
+      <div className={`flex items-center gap-2 px-3 py-1.5 ${style.bg} border-l-2 ${style.border}`}>
+        <span className={`text-[10px] font-bold tracking-wider ${style.labelColor}`}>{style.label}</span>
+        <span className={`text-xs ${style.text}`}>{segment.content}</span>
+      </div>
+    )
+  }
+
+  if (segment.type === "user-send" || segment.type === "user-nudge" || segment.type === "user-interrupt") {
+    return (
+      <div className={`flex items-start gap-2 px-3 py-1.5 ${style.bg} border-l-2 ${style.border}`}>
+        <span className={`text-[10px] font-bold tracking-wider shrink-0 pt-0.5 ${style.labelColor}`}>{style.label}</span>
+        <span className={`text-xs ${style.text} whitespace-pre-wrap`}>{segment.content}</span>
+        {segment.timestamp && (
+          <span className="text-[10px] text-gray-600 shrink-0 ml-auto">
+            {new Date(segment.timestamp).toLocaleTimeString()}
+          </span>
+        )}
+      </div>
+    )
+  }
+
+  if (segment.type === "code") {
+    return (
+      <pre className={`px-3 py-2 ${style.bg} border-l-2 ${style.border} text-xs ${style.text} whitespace-pre-wrap overflow-x-auto`}>
+        {segment.content}
+      </pre>
+    )
+  }
+
+  // agent output
+  return (
+    <pre className={`px-3 py-1 text-xs ${style.text} whitespace-pre-wrap`}>
+      {segment.content}
+    </pre>
+  )
+}
+
 // --- Log viewer ---
+
+type FilterKey = "agent" | "system" | "user" | "code"
+
+function segmentFilter(type: SegmentType): FilterKey {
+  if (type === "user-send" || type === "user-nudge" || type === "user-interrupt") return "user"
+  if (type === "code") return "code"
+  if (type === "system") return "system"
+  return "agent"
+}
 
 function LogViewer({ log, isRunning }: { log: string; isRunning: boolean }) {
   const [follow, setFollow] = useState(true)
-  const ref = useRef<HTMLPreElement>(null)
+  const [filters, setFilters] = useState<Record<FilterKey, boolean>>({
+    agent: true, system: true, user: true, code: true,
+  })
+  const ref = useRef<HTMLDivElement>(null)
   const prevLen = useRef(0)
+
+  const segments = parseLog(log)
+  const filtered = segments.filter((s) => filters[segmentFilter(s.type)])
 
   useEffect(() => {
     if (follow && log.length > prevLen.current && ref.current) {
@@ -171,15 +247,39 @@ function LogViewer({ log, isRunning }: { log: string; isRunning: boolean }) {
     setFollow(scrollHeight - scrollTop - clientHeight < 40)
   }
 
+  const toggleFilter = (key: FilterKey) =>
+    setFilters((f) => ({ ...f, [key]: !f[key] }))
+
+  const counts = segments.reduce(
+    (acc, s) => { acc[segmentFilter(s.type)]++; return acc },
+    { agent: 0, system: 0, user: 0, code: 0 } as Record<FilterKey, number>,
+  )
+
   return (
     <>
-      <div className="flex items-center justify-between mb-2">
-        <h2 className="text-sm font-bold text-gray-400">
-          Log
-          {isRunning && (
-            <span className="ml-2 inline-block w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-          )}
-        </h2>
+      <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-bold text-gray-400">
+            Log
+            {isRunning && (
+              <span className="ml-2 inline-block w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+            )}
+          </h2>
+          <div className="flex gap-1">
+            {(Object.keys(filterLabels) as FilterKey[]).map((key) => (
+              <button
+                key={key}
+                onClick={() => toggleFilter(key)}
+                className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors ${
+                  filters[key] ? filterLabels[key].activeColor : filterLabels[key].color
+                }`}
+              >
+                {filterLabels[key].label}
+                {counts[key] > 0 && <span className="ml-1 opacity-60">{counts[key]}</span>}
+              </button>
+            ))}
+          </div>
+        </div>
         <button
           onClick={() => {
             setFollow(true)
@@ -190,14 +290,24 @@ function LogViewer({ log, isRunning }: { log: string; isRunning: boolean }) {
           {follow ? "following" : "scroll to bottom"}
         </button>
       </div>
-      <pre
+      <div
         ref={ref}
         onScroll={handleScroll}
-        className="flex-1 min-h-0 overflow-auto rounded border border-gray-800 bg-gray-900 p-3 font-mono text-xs text-gray-300 whitespace-pre-wrap"
-        style={{ maxHeight: "calc(100vh - 280px)" }}
+        className="flex-1 min-h-0 overflow-auto rounded border border-gray-800 bg-gray-900 font-mono"
+        style={{ maxHeight: "calc(100vh - 300px)" }}
       >
-        {log || <span className="text-gray-600">Waiting for output...</span>}
-      </pre>
+        {filtered.length === 0 ? (
+          <div className="p-3 text-xs text-gray-600">
+            {log ? "All segments filtered out" : "Waiting for output..."}
+          </div>
+        ) : (
+          <div className="divide-y divide-gray-800/50">
+            {filtered.map((segment, i) => (
+              <LogSegmentView key={i} segment={segment} />
+            ))}
+          </div>
+        )}
+      </div>
     </>
   )
 }
@@ -251,7 +361,7 @@ export default function RunPage() {
   const meta = metaData?.run ?? null
   const log = logData?.content ?? ""
   const isRunning = meta?.status === "running"
-  const showDeploy = meta?.mode === "job" && meta.workdir?.includes("projects/self")
+  const showDeploy = !!meta?.workdir?.includes("projects/self")
 
   async function viewReport() {
     const res = await fetch(`/api/parsifal/report?id=${id}`)
@@ -277,7 +387,7 @@ export default function RunPage() {
         <h1 className="font-mono text-lg font-bold truncate">{id}</h1>
         {meta && (
           <span className={`text-sm font-medium ${meta.stale ? "text-yellow-400" : statusColors[meta.status] || "text-gray-400"}`}>
-            {meta.stale ? "stuck" : meta.status}
+            {meta.stale ? "stuck" : meta.status}{!meta.stale && (meta.status === "completed" || meta.status === "failed") ? ` (exit ${meta.exitCode ?? "?"})` : ""}
           </span>
         )}
       </div>

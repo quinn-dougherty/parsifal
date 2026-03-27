@@ -30,6 +30,7 @@ const handleSend = (id: string, message?: string) =>
   Effect.gen(function* () {
     if (!message) return yield* Effect.fail(new BadRequest("message required for send action"))
     yield* requireSession(id)
+    yield* appendLog(id, `\n⟫ SEND [${new Date().toISOString()}]: ${message}\n`)
     yield* sendText(id, message).pipe(Effect.mapError((e) => new Internal(e.message)))
     return { ok: true, action: "send" as const }
   })
@@ -37,7 +38,9 @@ const handleSend = (id: string, message?: string) =>
 const handleNudge = (id: string, message?: string) =>
   Effect.gen(function* () {
     yield* requireSession(id)
-    yield* sendText(id, message || "continue").pipe(
+    const text = message || "continue"
+    yield* appendLog(id, `\n⟫ NUDGE [${new Date().toISOString()}]: ${text}\n`)
+    yield* sendText(id, text).pipe(
       Effect.mapError((e) => new Internal(e.message)),
     )
     return { ok: true, action: "nudge" as const }
@@ -46,6 +49,7 @@ const handleNudge = (id: string, message?: string) =>
 const handleInterrupt = (id: string, message?: string) =>
   Effect.gen(function* () {
     yield* requireSession(id)
+    yield* appendLog(id, `\n⟫ INTERRUPT [${new Date().toISOString()}]${message ? `: ${message}` : ""}\n`)
     yield* sendKeys(id, "C-c").pipe(Effect.mapError((e) => new Internal(e.message)))
     if (message) {
       yield* sendKeysDelayed(id, `'${escapeShell(message)}' Enter`, 500)

@@ -17,6 +17,22 @@ export const paneAlive = (id: string): Effect.Effect<boolean, never> =>
     Effect.catchAll(() => Effect.succeed(false)),
   )
 
+export interface PaneStatus {
+  alive: boolean
+  exitCode: number | null
+}
+
+export const paneStatus = (id: string): Effect.Effect<PaneStatus, never> =>
+  exec(tmux(`list-panes -t ${id} -F '#{pane_dead}|#{pane_dead_status}'`)).pipe(
+    Effect.map((out) => {
+      const [dead, code] = out.trim().split("|")
+      if (dead === "0") return { alive: true, exitCode: null }
+      const parsed = parseInt(code, 10)
+      return { alive: false, exitCode: isNaN(parsed) ? null : parsed }
+    }),
+    Effect.catchAll(() => Effect.succeed({ alive: false, exitCode: null } as PaneStatus)),
+  )
+
 export const sendKeys = (id: string, keys: string) =>
   exec(tmux(`send-keys -t ${id} ${keys}`))
 
