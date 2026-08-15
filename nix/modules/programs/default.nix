@@ -1,14 +1,20 @@
 { pkgs, ... }: {
   programs = import ./enables.nix;
 
-  virtualisation.docker.enable = true;
+  virtualisation = {
+    docker.enable = true;
+    podman.enable = true;
+    incus.enable = true;
+  };
 
   environment.systemPackages = with pkgs; [
     wget
     curl
     kitty
+    ghostty
     jujutsu
     gh
+    spotify
     bitwarden-desktop
     ncdu
     zip
@@ -24,5 +30,9 @@
     sox
     pavucontrol
     fastfetch
+    ripgrep
+    typst 
+    typstyle
+    wezterm
   ];
 }

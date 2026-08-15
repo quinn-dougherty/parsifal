@@ -11,6 +11,7 @@
     hostName = hostConfig.hostname;
     networkmanager.enable = true;
     firewall.trustedInterfaces = [ "tailscale0" ];
+    nftables.enable = true;
   };
 
   time.timeZone = hostConfig.timezone;
@@ -58,6 +59,7 @@
       "networkmanager"
       "wheel"
       "docker"
+      "incus-admin"
     ];
   };
 
