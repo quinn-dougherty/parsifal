@@ -32,6 +32,7 @@
           ./modules/programs
           ./modules/orch.nix
           ./modules/greetd.nix
+          ./modules/islnet.nix
           ./modules/home
         ];
       };

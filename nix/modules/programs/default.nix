@@ -31,7 +31,7 @@
     pavucontrol
     fastfetch
     ripgrep
-    typst 
+    typst
     typstyle
     wezterm
   ];
