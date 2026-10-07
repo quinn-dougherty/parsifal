@@ -171,6 +171,18 @@ in
       ExecStart = "${lib.getExe pkgs.forgejo-runner} daemon --config /etc/forgejo-runner/config.yaml";
       Restart = "always";
       RestartSec = 10;
+
+      # The Mantle key for tooling/stpa's claude-review workflow. The source stays
+      # root-owned 0600; systemd copies it into the unit's private credentials dir
+      # (/run/credentials/forgejo-runner.service/, readable by the runner user
+      # only) and exports $CREDENTIALS_DIRECTORY, which `nix:host` jobs inherit.
+      #
+      # Scope, stated because it is the tradeoff: every host job on this runner,
+      # from any repo it is registered to, can read it — same as anything else in
+      # the runner's environment. Container jobs cannot (valid_volumes = [ ]). The
+      # `-` prefix means a missing file is not a start failure, so the runner comes
+      # up without it and only that workflow fails. See runbook step 5.
+      LoadCredential = [ "-claude-review:${secretsDir}/claude-review.env" ];
     };
   };
 }
@@ -225,3 +237,15 @@ in
 #
 # Changing labels requires re-registering with a fresh token: stop the service,
 # rm /var/lib/forgejo-runner/.runner, repeat step 3.
+#
+# 5. Claude review credential (optional). Same shape as the laptop's
+#    ~/.config/claude-isl/bedrock.env, minus the CLAUDE_CONFIG_DIR line — the
+#    workflow sets CLAUDE_CODE_USE_MANTLE and AWS_REGION itself:
+#
+#      sudoedit /var/lib/secrets/islnet/claude-review.env    # root 0600
+#
+#      AWS_BEARER_TOKEN_BEDROCK=<CI key — not the laptop's>
+#      ANTHROPIC_CUSTOM_HEADERS="<workspace header, as on the laptop>"
+#
+#    Then `sudo systemctl restart forgejo-runner`. Credentials are read at unit
+#    start, so rotating the key is an edit plus a restart, no rebuild.
