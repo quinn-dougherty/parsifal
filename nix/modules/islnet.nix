@@ -179,10 +179,13 @@ in
       #
       # Scope, stated because it is the tradeoff: every host job on this runner,
       # from any repo it is registered to, can read it — same as anything else in
-      # the runner's environment. Container jobs cannot (valid_volumes = [ ]). The
-      # `-` prefix means a missing file is not a start failure, so the runner comes
-      # up without it and only that workflow fails. See runbook step 5.
-      LoadCredential = [ "-claude-review:${secretsDir}/claude-review.env" ];
+      # the runner's environment. Container jobs cannot (valid_volumes = [ ]).
+      #
+      # Required, not optional: the runner will not start without the file, so do
+      # runbook step 5 before switching to this. LoadCredential has no `-` prefix
+      # the way EnvironmentFile does; an earlier revision used one and systemd
+      # quietly loaded the credential under the name `-claude-review`.
+      LoadCredential = [ "claude-review:${secretsDir}/claude-review.env" ];
     };
   };
 }
@@ -238,7 +241,8 @@ in
 # Changing labels requires re-registering with a fresh token: stop the service,
 # rm /var/lib/forgejo-runner/.runner, repeat step 3.
 #
-# 5. Claude review credential (optional). Same shape as the laptop's
+# 5. Claude review credential. Required by the unit since it was added, so
+#    write it before the first switch that includes it. Same shape as the laptop's
 #    ~/.config/claude-isl/bedrock.env, minus the CLAUDE_CONFIG_DIR line — the
 #    workflow sets CLAUDE_CODE_USE_MANTLE and AWS_REGION itself:
 #
