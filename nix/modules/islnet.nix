@@ -28,7 +28,10 @@ let
     runner = {
       # Absolute, so `register` writes it here no matter the invoking cwd.
       file = "${stateDir}/.runner";
-      capacity = 2;
+      # 20 CPUs on the box; capacity is CPU-bound here, not RAM-bound (jobs
+      # run ~1.5GB each, so RAM would allow far more). Leave a few cores free
+      # for the host (orch app, wireguard, podman overhead per job).
+      capacity = 16;
       timeout = "3h";
       shutdown_timeout = "1h";
       insecure = false; # the forge serves a real Let's Encrypt cert
@@ -145,6 +148,31 @@ in
 
     # PATH for `nix:host` jobs — including nix itself, which is the point of
     # running them on the host. Container jobs get the image's PATH instead.
+    #
+    # This list is exhaustive, not additive: NixOS sets the unit's PATH to
+    # exactly `makeBinPath path` (nixos/lib/systemd-lib.nix — `environment.PATH =
+    # mkIf (config.path != []) ...`), with no /run/current-system/sw/bin behind
+    # it. So `environment.systemPackages` is NOT on a job's PATH, and anything a
+    # workflow shells out to has to be named here.
+    #
+    # gnugrep is the trap worth naming: coreutils does not ship grep, so without
+    # it `grep` is simply absent and any shell gate that greps dies with "command
+    # not found" rather than returning a verdict.
+    #
+    # It is no longer *required*, though, and the reason is the better answer to
+    # this whole problem: tooling/stpa now ships `nix/devShells.nix`, and its
+    # workflows run gates as `nix develop .#guards --command ...`. So a repo
+    # declares its own toolchain, pinned by its own flake.lock, and this list only
+    # has to carry what runs *outside* a dev shell — bash, coreutils and git for
+    # the checkout step, plus nix itself. Keeping gnugrep is belt-and-braces for
+    # ad-hoc debugging on the box; drop it if you would rather the job PATH stay
+    # strictly minimal.
+    #
+    # That is also why python3/uv, a JDK, elan and tree-sitter are absent and
+    # should stay absent: adding them here would put a repo's toolchain in a
+    # public machine config, unversioned against the code that needs it. Note
+    # that unlike `labels`, changing `path` does NOT require re-registering the
+    # runner — just a rebuild and `systemctl restart forgejo-runner`.
     path = [
       config.nix.package
     ]
@@ -154,6 +182,7 @@ in
       curl
       gawk
       gitMinimal
+      gnugrep
       gnused
       gnutar
       gzip
