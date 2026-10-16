@@ -10,6 +10,7 @@ modules/
   hardware.nix            ← generated hardware config (do not hand-edit)
   orch.nix                ← systemd service for the Next.js orch app (port 3000)
   islnet.nix              ← ISLNET wireguard tunnel + Forgejo Actions runner
+  litellm.nix             ← LiteLLM gateway to Bedrock Mantle for tailnet guests (port 4000)
   programs/
     default.nix           ← environment.systemPackages + imports enables.nix
     enables.nix           ← programs.<x>.enable flags (grouped attrset)
