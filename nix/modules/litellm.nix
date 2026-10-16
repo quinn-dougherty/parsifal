@@ -261,27 +261,12 @@ in
 # 1. Pull and switch. podman-litellm stays inactive (condition unmet) until
 #    step 2; postgresql comes up and creates the `litellm` role and database.
 #
-# 2. Secrets. One root 0600 env file, the Mantle key and workspace copied from
-#    the runner's claude-review credential, plus a fresh master key and DB
-#    password. Run as one root shell on parsifal:
-#
-#      sudo bash -euo pipefail <<'SH'
-#      umask 077
-#      set -a; . /var/lib/secrets/islnet/claude-review.env; set +a
-#      pw=$(openssl rand -hex 24)
-#      sudo -u postgres psql -v ON_ERROR_STOP=1 \
-#        -c "ALTER ROLE litellm WITH LOGIN PASSWORD '$pw'"
-#      cat > /var/lib/secrets/litellm/litellm.env <<EOF
-#      BEDROCK_MANTLE_API_KEY=$AWS_BEARER_TOKEN_BEDROCK
-#      MANTLE_WORKSPACE_ID=${ANTHROPIC_CUSTOM_HEADERS#anthropic-workspace-id: }
-#      LITELLM_MASTER_KEY=sk-$(openssl rand -hex 32)
-#      DATABASE_URL=postgresql://litellm:$pw@127.0.0.1:5432/litellm
-#      EOF
-#      SH
-#      sudo cat /var/lib/secrets/litellm/litellm.env   # eyeball it once
-#
-#    (The master key must start with `sk-`. MANTLE_WORKSPACE_ID assumes the
-#    runner's ANTHROPIC_CUSTOM_HEADERS holds just that one header.)
+# 2. Secrets: run nix/proxyinit.sh from a checkout on parsifal. It copies the
+#    Mantle key and workspace id from the runner's claude-review credential,
+#    generates a master key (`sk-` prefixed, as LiteLLM requires) and a DB
+#    password, sets the password on the `litellm` role, and writes
+#    /var/lib/secrets/litellm/litellm.env (root 0600). Refuses to overwrite an
+#    existing file without --force, since a rerun rotates both.
 #
 # 3. sudo systemctl start podman-litellm && journalctl -fu podman-litellm
 #    First start pulls the image and runs the Prisma migrations. Then:
