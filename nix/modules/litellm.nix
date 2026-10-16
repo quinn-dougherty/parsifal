@@ -42,11 +42,13 @@ let
   # after the container). Holds host.env: the tailscale IP to bind.
   runDir = "/run/litellm";
 
-  # Same release as the source audited for Mantle support (/v1/messages via
-  # llms/bedrock/messages/mantle_transformation.py), pinned by index digest.
-  image = "ghcr.io/berriai/litellm-database:v1.89.0@sha256:8402d2372a7ba8641cf09d8fa47006088d0705979b4e87c4eb2aec58fb298ce8";
+  # Pinned by index digest. Needs >= the release whose
+  # llms/bedrock/messages/mantle_transformation.py keeps `stream` in the body
+  # and decodes plain SSE: 1.89 dropped it and used the AWS event-stream
+  # decoder, so every streaming /v1/messages call (all of Claude Code) 500'd.
+  image = "ghcr.io/berriai/litellm-database:v1.99.4@sha256:5b316a7913b52b26c4d421f047487b218610eba623d1edcc51fa7820be758c38";
 
-  # Mantle id → names clients may request, and $/MTok. LiteLLM 1.89 has no
+  # Mantle id → names clients may request, and $/MTok. LiteLLM has no
   # price table for Claude on Mantle, so without these every request costs $0
   # and budgets never trip. These are Anthropic first-party list prices;
   # Bedrock bills on its own sheet, so treat budgets as approximate.
