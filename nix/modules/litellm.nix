@@ -129,6 +129,34 @@ let
   configFile = (pkgs.formats.yaml { }).generate "litellm-config.yaml" settings;
 
   tailscale = lib.getExe config.services.tailscale.package;
+
+  # `litellm-gw <path> [json]`: call the gateway's admin API as the master key.
+  # POSTs json if given, else GETs. Re-execs under sudo to read the env file,
+  # so the master key never lands in a user's shell, history or environment.
+  litellm-gw = pkgs.writeShellApplication {
+    name = "litellm-gw";
+    runtimeInputs = [ pkgs.curl ];
+    text = ''
+      if [ $# -lt 1 ] || [ $# -gt 2 ]; then
+        echo "usage: litellm-gw <path> [json]   e.g. litellm-gw /key/generate '{...}'" >&2
+        exit 2
+      fi
+      if [ "$(id -u)" -ne 0 ]; then
+        exec /run/wrappers/bin/sudo "$0" "$@"
+      fi
+
+      # shellcheck source=/dev/null
+      . ${envFile}
+      ip=$(${tailscale} ip -4 | head -n1)
+      [ -n "$ip" ] || { echo "no tailscale IPv4 on this host" >&2; exit 1; }
+
+      args=(-sS --fail-with-body -H "Authorization: Bearer $LITELLM_MASTER_KEY")
+      if [ $# -eq 2 ]; then
+        args+=(-H "Content-Type: application/json" -d "$2")
+      fi
+      exec curl "''${args[@]}" "http://$ip:${toString port}$1"
+    '';
+  };
 in
 {
   # tailscaled itself is enabled in configuration.nix; asserted so this module
@@ -251,6 +279,8 @@ in
     };
   };
 
+  environment.systemPackages = [ litellm-gw ];
+
   systemd.tmpfiles.rules = [
     "d /var/lib/secrets 0700 root root -"
     "d ${secretsDir} 0700 root root -"
@@ -273,22 +303,15 @@ in
 #
 #      curl -s http://$(tailscale ip -4):4000/health/liveliness
 #
-# 4. Virtual keys. Run on parsifal; the master key never leaves the box.
-#    `gw <path> [json]` POSTs json if given, else GETs:
+# 4. Virtual keys, with `litellm-gw <path> [json]` (defined above; POSTs json
+#    if given, else GETs). Run on parsifal; the master key never leaves the box:
 #
-#      gw() {
-#        sudo bash -c '. /var/lib/secrets/litellm/litellm.env
-#          curl -sS "http://$(tailscale ip -4):4000$1" \
-#            -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
-#            ${2:+-H "Content-Type: application/json" -d "$2"}' _ "$@"
-#      }
+#      # create: expires in 7 days, $500 hard cap, 120 requests/minute
+#      litellm-gw /key/generate '{"key_alias":"alice","duration":"7d",
+#                                 "max_budget":500,"rpm_limit":120}' | jq -r .key
 #
-#      # create: expires in 14 days, $50 hard cap, 60 requests/minute
-#      gw /key/generate '{"key_alias":"alice","duration":"14d",
-#                          "max_budget":50,"rpm_limit":60}' | jq -r .key
-#
-#      gw '/key/info?key=sk-...'                       # spend so far
-#      gw /key/delete '{"key_aliases":["alice"]}'      # or {"keys":["sk-..."]}
+#      litellm-gw '/key/info?key=sk-...'                     # spend so far
+#      litellm-gw /key/delete '{"key_aliases":["alice"]}'    # or {"keys":["sk-..."]}
 #
 #    Rotating the Mantle key: edit litellm.env, restart podman-litellm.
 #    Guests' virtual keys are unaffected.
