@@ -29,9 +29,9 @@ let
       # Absolute, so `register` writes it here no matter the invoking cwd.
       file = "${stateDir}/.runner";
       # 20 CPUs on the box; capacity is CPU-bound here, not RAM-bound (jobs
-      # run ~1.5GB each, so RAM would allow far more). Leave a few cores free
-      # for the host (orch app, wireguard, podman overhead per job).
-      capacity = 16;
+      # run ~1.5GB each, so RAM would allow far more). Was 16; cut to 8 to
+      # leave more of the box for the host and its other services.
+      capacity = 8;
       timeout = "3h";
       shutdown_timeout = "1h";
       insecure = false; # the forge serves a real Let's Encrypt cert
